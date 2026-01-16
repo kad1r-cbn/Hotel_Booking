@@ -50,12 +50,9 @@ def degisken_ozet(dataframe, cat_th=20, car_th=30):
 
     return cat_cols, num_cols, cat_but_car
 
-
-# Fonksiyonu çalıştır
 cat_cols, num_cols, cat_but_car = degisken_ozet(df)
 
 # 1. SAYISAL DEĞİŞKENLER (Matematiksel işlem yapılabilir)
-# Bunların ortalamasını alabilirsin, grafiğini çizebilirsin.
 num_cols = [
     'lead_time',
     'stays_in_weekend_nights', 'stays_in_week_nights',
@@ -68,7 +65,6 @@ num_cols = [
 ]
 
 # 2. KATEGORİK DEĞİŞKENLER (Gruplama yapılabilir)
-# Bunları 'category' tipine çevireceğiz.
 cat_cols = [
     'hotel', 'meal', 'country',
     'market_segment', 'distribution_channel',
@@ -87,8 +83,6 @@ for col in cat_cols:
     # Eğer sütun sayısal görünüyorsa (agent gibi) önce string'e, sonra kategoriye çevir
     # Bu, '9.0' ile '9' karmaşasını önler.
     df[col] = df[col].astype(str).astype('category')
-
-print("✅ Dönüştürme tamamlandı! Listeler hazır.")
 df.info()
 
 
@@ -100,3 +94,68 @@ df['arrival_date_full'] = pd.to_datetime(df['arrival_date_full'])
 df.duplicated().sum()
 df["meal"].value_counts()
 df["adr"].max()
+
+
+
+# children null olanları 0 olarak dolduruldu.
+df["children"] = df["children"].fillna(0).astype(int)
+
+# contry null olanlara "unknown" olarak dolduruldu.
+# 1. Adım: Önce kategori listesine 'Unknown' seçeneğini ekle
+if 'Unknown' not in df['country'].cat.categories:
+    df['country'] = df['country'].cat.add_categories('Unknown')
+
+# 2. Adım: Şimdi gönül rahatlığıyla boşlukları doldurabilirsin
+df['country'] = df['country'].fillna('Unknown')
+
+# agent null olanlara 0 olarak dolduruldu.
+# 1. Önce sütunları string (yazı) yapalım ki işlem garanti olsun
+df["agent"] = df["agent"].astype(str)
+df["company"] = df["company"].astype(str)
+
+# 2. "nan" yazan yerleri "0" ile değiştirelim
+df["agent"] = df["agent"].replace("nan", "0")
+df["company"] = df["company"].replace("nan", "0")
+
+# 3. Önce Float yapalım (Çünkü "9.0" yazısını direkt int yapamazsın, önce 9.0 ondalıklı sayı olmalı)
+df["agent"] = df["agent"].astype(float).astype(int)
+df["company"] = df["company"].astype(float).astype(int)
+
+# 4. Son olarak Kategori yapıp paketleyelim
+df["agent"] = df["agent"].astype("category")
+df["company"] = df["company"].astype("category")# company null olanlara 0 olarak dolduruldu.
+df["company"] = df["company"].fillna(0).astype(int)
+
+# yetişkin bebek çocuk sayısının toplamının 0 olduğu rezervasyonları kaldırdık
+danger_value = df[(df["adults"] + df["children"] + df["babies"]) == 0]
+print(danger_value.shape[0]) #180 değer çıktı
+df.drop(danger_value.index, inplace=True)
+
+# reservation_status_date formatını tarih formatına değiştirdik
+df["reservation_status_date"] = pd.to_datetime(df["reservation_status_date"])
+
+# 1. Duplicate'leri Sil
+df.drop_duplicates(inplace=True)
+
+# 2. Negatif ve Aşırı Yüksek Fiyatları Temizle (0 ile 5000 arası kalsın)
+# Not: Bedava (0) konaklamalar kalabilir, onlar promosyon olabilir.
+df = df[(df["adr"] >= 0) & (df["adr"] < 5000)]
+
+# 3. Hayalet ve "Otobüs" Misafirleri Temizle
+# Hiç kimsenin kalmadığı (0 kişi) veya aşırı kalabalık (örn: 10 kişiden fazla) odaları atalım.
+df = df[(df["adults"] + df["children"] + df["babies"] > 0)]
+df = df[(df["adults"] + df["children"] + df["babies"] <= 10)]
+
+# 4. Undefined Yemekleri Düzelt
+df.loc[df["meal"] == "Undefined", "meal"] = "SC"
+
+# --- RAPORLAMA ---
+print("✅ Temizlik Tamamlandı.")
+print(f"Kalan Satır Sayısı: {df.shape[0]}")
+
+print(df['is_canceled'].value_counts(normalize=True))
+df.head()
+df.info()
+df.shape
+df.isnull().sum()
+df.describe().T
