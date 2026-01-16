@@ -45,3 +45,17 @@ df.drop(danger_value.index, inplace=True)
 # reservation_status_date formatını tarih formatına değiştirdik
 df["reservation_status_date"] = pd.to_datetime(df["reservation_status_date"])
 
+# describe ına bakalım
+df.describe([0.05, 0.25, 0.50, 0.75, 0.99,]).T
+
+df = df[df["adr"] > 0]
+df = df[df["adr"] < 5000]
+
+df = df[df["adults"] < 10 ]
+df = df[df["children"] < 5 ]
+df = df[df["babies"] < 5 ]
+
+# duplicete kontrolü
+duplicate_sayisi = df.duplicated().sum() #31813 adet duplike satır var ve bunlardan kurtuluyoruz.
+
+df.drop_duplicates(inplace=True) #85582 satırmız kaldı
