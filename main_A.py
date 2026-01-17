@@ -453,3 +453,165 @@ plt.title("RFM Segment Analizi (Doğru Renklendirme)", fontsize=16)
 plt.xlabel("Recency (Yenilik) Skoru", fontsize=12)
 plt.ylabel("Frequency (Sıklık) Skoru", fontsize=12)
 plt.show()
+
+
+
+
+rfm_df['pseudo_customer_id'] = (
+    rfm_df['country'].astype(str) + "_" +
+    rfm_df['market_segment'].astype(str) + "_" +
+    rfm_df['agent'].astype(str)
+)
+cut_date = rfm_df['arrival_date_full'].quantile(0.7)
+
+period_1 = rfm_df[rfm_df['arrival_date_full'] <= cut_date]
+period_2 = rfm_df[rfm_df['arrival_date_full'] > cut_date]
+
+p1 = period_1.groupby('pseudo_customer_id')['Segment'].agg(lambda x: x.mode()[0])
+p2 = period_2.groupby('pseudo_customer_id')['Segment'].agg(lambda x: x.mode()[0])
+common_customers = p1.index.intersection(p2.index)
+
+transition = pd.crosstab(
+    p1.loc[common_customers],
+    p2.loc[common_customers],
+    normalize='index'
+)
+
+print(transition)
+
+
+
+
+
+
+
+
+
+
+segment_adr = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        avg_adr=("adr", "mean"),
+        median_adr=("adr", "median"),
+        booking_count=("adr", "count")
+    )
+    .sort_values("avg_adr", ascending=False)
+)
+
+segment_adr
+
+
+
+
+vip_candidates = rfm_df[
+    (rfm_df["Segment"].isin(["ŞAMPİYONLAR (Champions)", "Sadık Müşteriler (Loyal)"])) &
+    (rfm_df["adr"] > rfm_df["adr"].quantile(0.75))
+]
+
+vip_summary = vip_candidates.groupby("Segment").agg(
+    avg_adr=("adr", "mean"),
+    count=("adr", "count")
+)
+
+vip_summary
+
+
+
+
+
+price_sensitivity = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        adr_std=("adr", "std"),
+        adr_mean=("adr", "mean")
+    )
+    .sort_values("adr_std", ascending=False)
+)
+
+price_sensitivity
+
+
+
+
+# 1. Eksik sütunu ana DataFrame'den (df) çekip rfm_df'e ekle
+rfm_df["special_requests"] = df["total_of_special_requests"]
+
+# 2. Analizi çalıştır
+special_request_analysis = (
+    rfm_df
+    .groupby("Segment", observed=True)
+    .agg(
+        avg_special_requests=("special_requests", "mean"),
+        request_rate=("special_requests", lambda x: (x > 0).mean())
+    )
+    .sort_values("avg_special_requests", ascending=False)
+)
+print(special_request_analysis)
+
+
+
+
+
+channel_segment = pd.crosstab(
+    rfm_df["Segment"],
+    rfm_df["market_segment"],
+    normalize="index"
+)
+
+channel_segment
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+
+# Segment bazlı özet metrikler (FAZ 4 çıktılarından beslenir)
+segment_summary = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        avg_adr=("adr", "mean"),
+        booking_count=("adr", "count"),
+        price_sensitivity=("adr", "std"),
+        special_request_rate=("special_requests", lambda x: (x > 0).mean())
+    )
+    .reset_index()
+)
+
+# CRM aksiyon mapping (iş bilgisi)
+def crm_action(row):
+    if row["Segment"] in ["ŞAMPİYONLAR (Champions)"]:
+        return "VIP ayrıcalıklar, oda upgrade, kişisel hizmet, indirim yok"
+    elif row["Segment"] in ["Sadık Müşteriler (Loyal)"]:
+        return "Direct booking teşviki, sadakat puanı, erken erişim"
+    elif row["Segment"] in ["Potansiyel Sadık (Potential Loyal)"]:
+        return "Kampanya, %10–15 indirim, tekrar rezervasyon teşviki"
+    elif row["Segment"] in ["Umut Vaat Eden (Promising)", "Yeni Gelen (New Customers)"]:
+        return "İlk deneyim kampanyası, hoş geldin teklifi"
+    elif row["Segment"] in ["Riskli (At Risk)", "Uykuda Dalanlar (About to Sleep)"]:
+        return "Erken rezervasyon indirimi, iptal önleyici teklif"
+    elif row["Segment"] in ["Uyuyanlar (Hibernating)"]:
+        return "Düşük bütçeli yeniden kazanım kampanyası"
+    else:
+        return "Standart CRM takibi"
+
+segment_summary["crm_action"] = segment_summary.apply(crm_action, axis=1)
+
+# Önceliklendirme (basit ama etkili)
+segment_summary["crm_priority"] = (
+    segment_summary["booking_count"] * segment_summary["avg_adr"]
+)
+
+segment_summary = segment_summary.sort_values(
+    "crm_priority", ascending=False
+)
+
+segment_summary
