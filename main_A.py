@@ -159,3 +159,459 @@ df.info()
 df.shape
 df.isnull().sum()
 df.describe().T
+
+
+
+
+outlier_candidates = [
+    'stays_in_weekend_nights',
+    'stays_in_week_nights',
+    'adults',
+    'children',
+    'babies',
+    'lead_time',                    # Ne kadar erken rezervasyon yapıyorlar?
+    'adr',                          # Fiyatlarda aşırı uçlar kaldı mı?
+    'days_in_waiting_list',         # Bekleme listesinde çürüyenler var mı?
+    'previous_cancellations',       # Seri iptalciler (Risk!)
+    'total_of_special_requests',    # Çok aşırı istek yapanlar kim?
+    'stays_in_week_nights'          # Otelde aylarca kalan var mı?
+]
+for col in outlier_candidates:
+    plt.figure(figsize=(10, 2)) # Geniş ve kısa grafikler
+    sns.boxplot(x=df[col], color="orange")
+    plt.title(f"Aykırı Değer Analizi: {col}", fontweight="bold")
+    plt.show()
+
+
+df=df[df["babies"]<5]
+df.shape[0]
+
+
+
+
+channel_analysis = df.groupby('market_segment', observed=True).agg({
+    'is_canceled': ['count', 'mean'],  # Hacim ve İptal Riski
+    'adr': 'mean'                     # Kârlılık (Ortalama Fiyat)
+})
+channel_analysis.columns = ["Toplam Rezervasyon", "İptal Oranı", "Ortalama Fiyat (ADR)",]
+channel_analysis["Pazar Payı (%)"] = (channel_analysis["Toplam Rezervasyon"] / channel_analysis["Toplam Rezervasyon"].sum()) * 100
+print(channel_analysis.sort_values(by="Toplam Rezervasyon", ascending=False))
+
+
+
+
+monthly_stats = df.groupby('arrival_date_month', observed=True).agg({
+    'is_canceled': ['count', 'mean'],
+    'adr': ['mean']
+})
+
+monthly_stats.columns = ["Rezervasyon Sayısı", "İptal Oranı", "Ortalama Fiyat"]
+monthly_stats = monthly_stats.reindex(month_order)
+
+print(monthly_stats)
+
+plt.figure(figsize=(14, 6))
+sns.barplot(x=monthly_stats.index, y=monthly_stats["Rezervasyon Sayısı"], color="skyblue", label="Rezervasyon Sayısı")
+ax2 = plt.twinx()
+sns.lineplot(x=monthly_stats.index, y=monthly_stats["İptal Oranı"], color="red", marker="o", lw=3, label="İptal Oranı", ax=ax2)
+plt.title("Aylara Göre Doluluk ve İptal Riski Analizi", fontsize=16)
+plt.show()
+
+
+print(df[df["arrival_date_month"].isin(["April", "June", "December"])].groupby([
+    "arrival_date_month",
+    "market_segment"])["is_canceled"].agg([
+    "count",
+    "mean"]).sort_values(by=[
+    "arrival_date_month", "mean"], ascending=[True, False]))
+
+
+
+
+top_10_countries = df['country'].value_counts().head(10).index
+country_analysis = df[df['country'].isin(top_10_countries)].groupby('country', observed=True).agg({
+    'is_canceled': ['count', 'mean'],  # Sayı ve İptal Oranı
+    'adr': 'mean'                      # Bıraktıkları Para
+})
+country_analysis.columns = ["Toplam Rezervasyon", "İptal Oranı", "Ortalama Fiyat (ADR)"]
+country_analysis["Pazar Payı (%)"] = (country_analysis["Toplam Rezervasyon"] / len(df)) * 100
+print(country_analysis.sort_values(by="Toplam Rezervasyon", ascending=False).round(2))
+plot_data = country_analysis.sort_values(by="İptal Oranı", ascending=False).head(10)
+plot_data.index = plot_data.index.astype(str)
+plt.figure(figsize=(12, 6))
+sns.barplot(x=plot_data.index, y=plot_data["İptal Oranı"], palette="viridis")
+plt.title("En Yüksek İptal Oranına Sahip 10 Ülke", fontsize=14)
+plt.ylabel("İptal Oranı")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+# 1. Misafir Tipi Sınıflandırması (Feature Engineering)
+# Mantık: Eğer çocuk veya bebek varsa "Aile", yoksa ve 2 kişiyse "Çift", 1 kişiyse "Tek"
+def classify_guest(row):
+    if row['children'] > 0 or row['babies'] > 0:
+        return 'Family (Aile)'
+    elif row['adults'] == 2:
+        return 'Couple (Çift)'
+    elif row['adults'] == 1:
+        return 'Single (Tek)'
+    else:
+        return 'Group/Other' # 3+ yetişkin vs.
+
+# Yeni sütunu oluşturalım
+df['guest_type'] = df.apply(classify_guest, axis=1)
+
+# 2. Misafir Tiplerine Göre Analiz
+guest_analysis = df.groupby('guest_type', observed=True).agg({
+    'is_canceled': ['count', 'mean'],
+    'adr': 'mean'
+})
+
+guest_analysis.columns = ["Toplam Rezervasyon", "İptal Oranı", "Ortalama Fiyat (ADR)"]
+guest_analysis["Pazar Payı (%)"] = (guest_analysis["Toplam Rezervasyon"] / len(df)) * 100
+
+print(guest_analysis.sort_values(by="Toplam Rezervasyon", ascending=False).round(2))
+
+
+# 1. Önce sadece GERÇEKLEŞEN (İptal olmayan) konaklamaları alalım
+real_guests = df[df['is_canceled'] == 0].copy()
+
+# 2. Toplam Geceleme Sayısını Hesaplayalım (Hafta içi + Hafta sonu)
+real_guests['total_nights'] = real_guests['stays_in_weekend_nights'] + real_guests['stays_in_week_nights']
+
+# 3. Her Müşteriden Kazanılan TOPLAM PARAYI (Revenue) Hesaplayalım
+# Formül: Gece Sayısı * Günlük Fiyat (ADR)
+real_guests['total_revenue'] = real_guests['total_nights'] * real_guests['adr']
+
+# --- ANALİZ 1: ÜLKELERE GÖRE KAZANÇ ---
+country_revenue = real_guests.groupby('country', observed=True).agg({
+    'total_revenue': 'sum',      # Kasaya giren toplam para
+    'adr': 'mean',               # Ortalama oda fiyatı
+    'total_nights': 'mean',      # Ortalama kaç gece kalıyorlar?
+    'is_canceled': 'count'       # Kaç kişi gelmiş?
+})
+
+country_revenue.columns = ["Toplam Ciro (Revenue)", "Ortalama Fiyat (ADR)", "Ortalama Geceleme", "Misafir Sayısı"]
+# Ciroya göre sırala ve ilk 10'u göster
+print("-" * 30)
+print("💰 ÜLKELERE GÖRE KAZANÇ LİDERLERİ")
+print("-" * 30)
+print(country_revenue.sort_values(by="Toplam Ciro (Revenue)", ascending=False).head(10).round(2))
+
+
+# --- ANALİZ 2: PAZAR SEGMENTİNE GÖRE KAZANÇ ---
+segment_revenue = real_guests.groupby('market_segment', observed=True).agg({
+    'total_revenue': 'sum',
+    'adr': 'mean'
+})
+segment_revenue.columns = ["Toplam Ciro (Revenue)", "Ortalama Fiyat (ADR)"]
+print("\n" + "-" * 30)
+print("🏨 KANALLARA GÖRE KAZANÇ LİDERLERİ")
+print("-" * 30)
+print(segment_revenue.sort_values(by="Toplam Ciro (Revenue)", ascending=False).round(2))
+
+
+
+# --- CRM TEŞHİS ANALİZİ: LEAD TIME & DEPOSIT ---
+
+# 1. LEAD TIME KATEGORİZASYONU (Müşteri Davranışını Anlamak İçin)
+# Müşterileri "Planlılar" ve "Spontane Olanlar" diye ayıralım
+bins = [0, 7, 30, 90, 180, 365, 730]
+labels = ['Son Dakikacılar (0-7 Gün)', 'Yakın Plan (8-30 Gün)', 'Orta Vade (1-3 Ay)', 'Uzun Vade (3-6 Ay)', 'Çok Uzun (6-12 Ay)', 'Yıllık Plan (1+ Yıl)']
+
+df['lead_time_segment'] = pd.cut(df['lead_time'], bins=bins, labels=labels)
+
+# Lead Time Segmentlerine göre İptal Oranları
+lead_time_analysis = df.groupby('lead_time_segment', observed=True)['is_canceled'].mean() * 100
+
+# 2. DEPOSIT TİPİ ANALİZİ (Finansal Bağlılık)
+# Parayı ödeyen gerçekten sadık kalıyor mu?
+deposit_analysis = df.groupby('deposit_type', observed=True)['is_canceled'].mean() * 100
+
+# 3. ÖZEL İSTEK ETKİSİ (Hizmet Beklentisi)
+# Özel istekte bulunan müşteri, otelle bağ kurmuş demektir. İptal oranı düşük mü?
+df['has_request'] = df['total_of_special_requests'] > 0
+request_analysis = df.groupby('has_request', observed=True)['is_canceled'].mean() * 100
+
+# --- SONUÇLARI YAZDIRALIM ---
+print(f"{'-'*30}\n📊 BEKLEME SÜRESİNE (LEAD TIME) GÖRE İPTAL ORANLARI (%)\n{'-'*30}")
+print(lead_time_analysis.round(2))
+
+print(f"\n{'-'*30}\n💰 DEPOZİTO TİPİNE GÖRE İPTAL ORANLARI (%)\n{'-'*30}")
+print(deposit_analysis.round(2))
+
+print(f"\n{'-'*30}\n🛎️ ÖZEL İSTEK (SPECIAL REQUEST) ETKİSİ (%)\n{'-'*30}")
+print(f"Özel İsteği Olmayanların İptal Oranı: %{request_analysis[False]:.2f}")
+print(f"Özel İsteği Olanların İptal Oranı:    %{request_analysis[True]:.2f}")
+
+
+
+
+
+# 1. VERİ HAZIRLIĞI
+# Sadece gerçekleşen (iptal olmayan) rezervasyonları alıyoruz, çünkü iptal edenden para kazanmadık.
+rfm_df = df[df['is_canceled'] == 0].copy()
+
+# Analiz Tarihi (Verideki son tarihten 2 gün sonrası)
+analysis_date = rfm_df['arrival_date_full'].max() + dt.timedelta(days=2)
+
+# --- 2. METRİKLERİN HESAPLANMASI (HAM DEĞERLER) ---
+
+# R (RECENCY): Müşteri kaç gün önce geldi?
+rfm_df['Recency'] = (analysis_date - rfm_df['arrival_date_full']).dt.days
+
+# F (FREQUENCY): Müşteri toplam kaç kez geldi?
+# İPUCU: Veri setindeki 'previous_bookings_not_canceled' sütunu müşterinin geçmişini söyler.
+# Buna +1 ekliyoruz (çünkü şu anki konaklaması da var).
+rfm_df['Frequency'] = rfm_df['previous_bookings_not_canceled'] + 1
+
+# M (MONETARY): Müşteri toplam ne kadar ödedi?
+rfm_df['Monetary'] = rfm_df['adr'] * (rfm_df['stays_in_weekend_nights'] + rfm_df['stays_in_week_nights'])
+
+# Negatif veya sıfır bedelli (Complementary) odaları temizleyelim ki skor bozulmasın
+rfm_df = rfm_df[rfm_df['Monetary'] > 0]
+
+# --- 3. SKORLAMA (1-5 ARASI PUAN VERME) ---
+
+# Recency Score (5 = En Yeni, 1 = En Eski)
+rfm_df["Recency_Score"] = pd.qcut(rfm_df['Recency'], 5, labels=[5, 4, 3, 2, 1])
+
+# Frequency Score (5 = Çok Sık Gelen, 1 = Tek Seferlik)
+# Not: Çoğu kişi 1 kere geldiği için burada yoğunluk 1'de toplanabilir, rank metoduyla zorluyoruz.
+rfm_df["Frequency_Score"] = pd.qcut(rfm_df['Frequency'].rank(method="first"), 5, labels=[1, 2, 3, 4, 5])
+
+# Monetary Score (5 = Çok Para, 1 = Az Para)
+rfm_df["Monetary_Score"] = pd.qcut(rfm_df['Monetary'].rank(method="first"), 5, labels=[1, 2, 3, 4, 5])
+
+# --- 4. RFM SKORUNU BİRLEŞTİRME ---
+# İşte senin aradığın "555", "121" gibi karne notları burada oluşuyor.
+rfm_df["RFM_SCORE"] = (rfm_df['Recency_Score'].astype(str) +
+                       rfm_df['Frequency_Score'].astype(str) +
+                       rfm_df['Monetary_Score'].astype(str))
+
+# --- 5. SEGMENTASYON (Müşteri Etiketleri) ---
+# Segmentleri R ve F skorlarına göre belirleriz (Klasik RFM Yaklaşımı)
+seg_map = {
+    r'[1-2][1-2]': 'Uyuyanlar (Hibernating)',
+    r'[1-2][3-4]': 'Riskli (At Risk)',
+    r'[1-2]5': 'Kaybedilemez (Cant Loose)',
+    r'3[1-2]': 'Uykuya Dalıyor (About to Sleep)',
+    r'33': 'Dikkat (Need Attention)',
+    r'[3-4][4-5]': 'Sadık Müşteriler (Loyal)',
+    r'41': 'Umut Vaat Eden (Promising)',
+    r'51': 'Yeni Gelen (New Customers)',
+    r'[4-5][2-3]': 'Potansiyel Sadık (Potential Loyal)',
+    r'5[4-5]': 'ŞAMPİYONLAR (Champions)'
+}
+
+# Regex ile skorları isme çevir (Sadece R ve F'ye bakarak)
+rfm_df['Segment'] = (rfm_df['Recency_Score'].astype(str) + rfm_df['Frequency_Score'].astype(str)).replace(seg_map, regex=True)
+
+# --- ÇIKTI 1: SENİN GÖRMEK İSTEDİĞİN DETAYLI TABLO ---
+print(f"{'-'*60}\n📋 RFM ANALİZ TABLOSU (R, F, M Değerleri ve Skorları)\n{'-'*60}")
+# Sütunları senin için seçiyorum: Ham değerler VE Skorlar yan yana
+cols_to_show = ['country', 'market_segment',
+                'Recency', 'Recency_Score',
+                'Frequency', 'Frequency_Score',
+                'Monetary', 'Monetary_Score',
+                'RFM_SCORE', 'Segment']
+
+print(rfm_df[cols_to_show].head(15))
+
+# 1. Renk Matrisini Hazırlama (Kalite Skoru: R + F)
+# Renkler artık kişi sayısına göre değil, skorun iyiliğine göre (Yeşil=5+5, Kırmızı=1+1) sabitlenecek.
+r_labels = [5, 4, 3, 2, 1]
+f_labels = [5, 4, 3, 2, 1]
+quality_matrix = pd.DataFrame(
+    [[r + f for r in r_labels] for f in f_labels],
+    index=f_labels, columns=r_labels
+)
+
+# 2. Gerçek Veriyi (Sayıları) Hazırlama
+rfm_count = rfm_df.groupby(['Frequency_Score', 'Recency_Score'], observed=True).size().unstack().reindex(index=f_labels, columns=r_labels).fillna(0)
+rfm_labels = rfm_df.groupby(['Frequency_Score', 'Recency_Score'], observed=True)['Segment'].agg(lambda x: x.mode()[0]).unstack().reindex(index=f_labels, columns=r_labels).fillna("")
+
+# 3. Etiketleri Oluşturma
+clean_labels = rfm_labels.apply(lambda col: col.str.split('(').str[0]) # İngilizceyi temizle
+annot_labels = clean_labels.astype(str) + "\n(" + rfm_count.astype(int).astype(str) + " Kişi)"
+
+# 4. Çizim
+plt.figure(figsize=(15, 9))
+sns.heatmap(
+    quality_matrix,     # RENKLER: Sabit Kalite Skoruna Göre (Yeşil=İyi, Kırmızı=Kötü)
+    annot=annot_labels, # YAZILAR: Gerçek Kişi Sayıları
+    fmt='',
+    cmap='RdYlGn',      # Artık doğru çalışır (Skor yüksekse Yeşil)
+    linewidths=2,
+    linecolor='white',
+    cbar=False,
+    annot_kws={"size": 11, "weight": "bold", "color": "black"} # Siyah yazı her renkte okunur
+)
+
+plt.title("RFM Segment Analizi (Doğru Renklendirme)", fontsize=16)
+plt.xlabel("Recency (Yenilik) Skoru", fontsize=12)
+plt.ylabel("Frequency (Sıklık) Skoru", fontsize=12)
+plt.show()
+
+
+
+
+rfm_df['pseudo_customer_id'] = (
+    rfm_df['country'].astype(str) + "_" +
+    rfm_df['market_segment'].astype(str) + "_" +
+    rfm_df['agent'].astype(str)
+)
+cut_date = rfm_df['arrival_date_full'].quantile(0.7)
+
+period_1 = rfm_df[rfm_df['arrival_date_full'] <= cut_date]
+period_2 = rfm_df[rfm_df['arrival_date_full'] > cut_date]
+
+p1 = period_1.groupby('pseudo_customer_id')['Segment'].agg(lambda x: x.mode()[0])
+p2 = period_2.groupby('pseudo_customer_id')['Segment'].agg(lambda x: x.mode()[0])
+common_customers = p1.index.intersection(p2.index)
+
+transition = pd.crosstab(
+    p1.loc[common_customers],
+    p2.loc[common_customers],
+    normalize='index'
+)
+
+print(transition)
+
+
+
+
+
+
+
+
+
+
+segment_adr = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        avg_adr=("adr", "mean"),
+        median_adr=("adr", "median"),
+        booking_count=("adr", "count")
+    )
+    .sort_values("avg_adr", ascending=False)
+)
+
+segment_adr
+
+
+
+
+vip_candidates = rfm_df[
+    (rfm_df["Segment"].isin(["ŞAMPİYONLAR (Champions)", "Sadık Müşteriler (Loyal)"])) &
+    (rfm_df["adr"] > rfm_df["adr"].quantile(0.75))
+]
+
+vip_summary = vip_candidates.groupby("Segment").agg(
+    avg_adr=("adr", "mean"),
+    count=("adr", "count")
+)
+
+vip_summary
+
+
+
+
+
+price_sensitivity = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        adr_std=("adr", "std"),
+        adr_mean=("adr", "mean")
+    )
+    .sort_values("adr_std", ascending=False)
+)
+
+price_sensitivity
+
+
+
+
+# 1. Eksik sütunu ana DataFrame'den (df) çekip rfm_df'e ekle
+rfm_df["special_requests"] = df["total_of_special_requests"]
+
+# 2. Analizi çalıştır
+special_request_analysis = (
+    rfm_df
+    .groupby("Segment", observed=True)
+    .agg(
+        avg_special_requests=("special_requests", "mean"),
+        request_rate=("special_requests", lambda x: (x > 0).mean())
+    )
+    .sort_values("avg_special_requests", ascending=False)
+)
+print(special_request_analysis)
+
+
+
+
+
+channel_segment = pd.crosstab(
+    rfm_df["Segment"],
+    rfm_df["market_segment"],
+    normalize="index"
+)
+
+channel_segment
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+
+# Segment bazlı özet metrikler (FAZ 4 çıktılarından beslenir)
+segment_summary = (
+    rfm_df
+    .groupby("Segment")
+    .agg(
+        avg_adr=("adr", "mean"),
+        booking_count=("adr", "count"),
+        price_sensitivity=("adr", "std"),
+        special_request_rate=("special_requests", lambda x: (x > 0).mean())
+    )
+    .reset_index()
+)
+
+# CRM aksiyon mapping (iş bilgisi)
+def crm_action(row):
+    if row["Segment"] in ["ŞAMPİYONLAR (Champions)"]:
+        return "VIP ayrıcalıklar, oda upgrade, kişisel hizmet, indirim yok"
+    elif row["Segment"] in ["Sadık Müşteriler (Loyal)"]:
+        return "Direct booking teşviki, sadakat puanı, erken erişim"
+    elif row["Segment"] in ["Potansiyel Sadık (Potential Loyal)"]:
+        return "Kampanya, %10–15 indirim, tekrar rezervasyon teşviki"
+    elif row["Segment"] in ["Umut Vaat Eden (Promising)", "Yeni Gelen (New Customers)"]:
+        return "İlk deneyim kampanyası, hoş geldin teklifi"
+    elif row["Segment"] in ["Riskli (At Risk)", "Uykuda Dalanlar (About to Sleep)"]:
+        return "Erken rezervasyon indirimi, iptal önleyici teklif"
+    elif row["Segment"] in ["Uyuyanlar (Hibernating)"]:
+        return "Düşük bütçeli yeniden kazanım kampanyası"
+    else:
+        return "Standart CRM takibi"
+
+segment_summary["crm_action"] = segment_summary.apply(crm_action, axis=1)
+
+# Önceliklendirme (basit ama etkili)
+segment_summary["crm_priority"] = (
+    segment_summary["booking_count"] * segment_summary["avg_adr"]
+)
+
+segment_summary = segment_summary.sort_values(
+    "crm_priority", ascending=False
+)
+
+segment_summary
