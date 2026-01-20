@@ -5,7 +5,7 @@ import seaborn as sns
 import statsmodels.api as sm
 import warnings
 import datetime as dt
-
+from pandas.core.interchange import dataframe
 
 
 
@@ -59,3 +59,111 @@ df = df[df["babies"] < 5 ]
 duplicate_sayisi = df.duplicated().sum() #31813 adet duplike satır var ve bunlardan kurtuluyoruz.
 
 df.drop_duplicates(inplace=True) #85582 satırmız kaldı
+
+df.columns = df.columns.str.strip()
+# Feature Engineering
+
+# 1. Toplam Kalış Süresi
+df['total_stay'] = df['stays_in_weekend_nights'] + df['stays_in_week_nights']
+
+# 2.Odada toplam kalacak kişi sayısı
+df['total_people'] = df['adults'] + df['children'] + df['babies']
+
+# 3.Ciro(Toplam bir oda ve müşteriden kazanılan para)
+df['revenue'] = df['adr'] * df['total_stay']
+
+# 4. Aile Var mı Yok mu
+df['is_family'] = 0
+df.loc[(df['children'] > 0) | (df['babies'] >0), 'is_family'] = 1
+
+# 5. Sadakat Kontrolü (daha önce iptal edilmiş rezervasyonu varsa bir de gerçekleşmiş konaklama varsa bunların toplamı)
+df['total_customer_history'] = df['previous_cancellations'] + df['previous_cancellations']
+
+
+
+#--------------------------------------------------
+# Grab_col_names ile değişken kategorisi
+#--------------------------------------------------
+def grab_col_names(dataframe, cat_th=25, car_th=40):
+    """
+    Veri setindeki kategorik, numerik ve kategorik fakat kardinal değişkenlerin isimlerini verir.
+    Not: Kategorik değişkenlerin içerisine numerik görünümlü kategorik değişkenler de dahildir.
+
+   ------
+
+            dataframe: dataframe
+                    Değişken isimleri alınmak istenilen dataframe
+            cat_th: int, optional
+                    numerik fakat kategorik olan değişkenler için sınıf eşik değeri
+            car_th: int, optinal
+                    kategorik fakat kardinal değişkenler için sınıf eşik değeri
+                    Returns
+        ------
+            cat_cols: list
+                    Kategorik değişken listesi
+            num_cols: list
+                    Numerik değişken listesi
+            cat_but_car: list
+                    Kategorik görünümlü kardinal değişken listesi
+
+         Notes
+        ------
+            cat_cols + num_cols + cat_but_car = toplam değişken sayısı
+            num_but_cat cat_cols'un içerisinde.
+            Return olan 3 liste toplamı toplam değişken sayısına eşittir: cat_cols + num_cols + cat_but_car = değişken sayısı
+
+    """
+    cat_cols = [col for col in dataframe.columns if dataframe[col].dtype == 'O']
+
+    num_but_cat = [col for col in dataframe.columns if dataframe[col].nunique() < cat_th and
+                    dataframe[col].dtypes != "0"]
+
+    cat_but_car = [col for col in dataframe.columns if dataframe[col].nunique() > car_th and
+                   dataframe[col].dtypes == "0"]
+
+    cat_cols = cat_cols + num_but_cat
+    cat_cols = [col for col in cat_cols if col not in cat_but_car ]
+
+    num_cols = [col for col in dataframe.columns if dataframe[col].dtypes != 'O']
+    num_cols = [col for col in num_cols if col not in num_but_cat ]
+
+    print(f"Observations: {dataframe.shape[0]}")
+    print(f"Variables: {dataframe.shape[1]}")
+    print(f'cat_cols: {len(cat_cols)}')
+    print(f'num_cols: {len(num_cols)}')
+    print(f'cat_but_car: {len(cat_but_car)}')
+    print(f'num_but_cat: {len(num_but_cat)}')
+
+    return cat_cols, cat_but_car, num_cols
+
+cat_cols , cat_but_car , num_cols = grab_col_names(df)
+
+
+#----------
+# ANALİZ
+#----------
+
+# Genel Durum
+print("Genel İptal Etme Durumu")
+print(df["is_canceled"].value_counts(normalize=True) * 100)
+print("-" * 30)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
